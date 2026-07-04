@@ -1,22 +1,25 @@
 # PoolMon Docker Compose
 #
-# USAGE:
+# USAGE (Portainer Repository build method):
 #   1. Edit the volume path under services.poolmon.volumes to match your NAS
-#   2. Deploy via Portainer: Stacks > Add stack > paste this file
-#      OR from command line: docker compose up -d
+#   2. In Portainer: Stacks > Add stack > Repository build method
+#      Repository URL:   https://github.com/N4MI73/poolmon
+#      Reference:         refs/heads/main
+#      Compose path:       docker-compose.yml
+#   3. Deploy the stack - Portainer clones the repo and builds the image
+#      from the Dockerfile automatically (see "build:" below - this is
+#      what makes that possible, rather than trying to pull a pre-made
+#      image that doesn't exist anywhere).
 #
-# PORTAINER SETUP:
-#   - In Portainer, go to Stacks > Add Stack
-#   - Name it "poolmon"
-#   - Paste this file into the Web editor
-#   - Edit POOLMON_DATA_PATH to your NAS path
-#   - Click Deploy the stack
+# LOCAL/MANUAL USE (optional, not needed for Portainer):
+#   docker compose up -d --build
 
 services:
   poolmon:
-    image: poolmon:latest        # built from the Dockerfile in this repo
-    # OR pull from a registry if you push it there:
-    # image: ghcr.io/n4mi73/poolmon:latest
+    build:
+      context: .              # build using the Dockerfile in this repo's root
+      dockerfile: Dockerfile
+    image: poolmon:latest      # name to give the resulting local image, once built
     container_name: poolmon
     restart: unless-stopped
     ports:
