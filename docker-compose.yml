@@ -20,6 +20,10 @@ services:
       context: .              # build using the Dockerfile in this repo's root
       dockerfile: Dockerfile
     image: poolmon:latest      # name to give the resulting local image, once built
+    pull_policy: build         # forces build instead of registry pull - this is what
+                                # protects against Portainer's "Pull and redeploy" quick
+                                # action, which otherwise tries to fetch this image from
+                                # Docker Hub and fails (no such image exists there)
     container_name: poolmon
     restart: unless-stopped
     ports:
