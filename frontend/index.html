@@ -275,6 +275,17 @@ nav.tabs button.active {
   font-weight: 400;
 }
 
+.fc-trend {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  margin-left: 8px;
+  font-weight: 500;
+}
+
+.fc-trend.trend-up { color: var(--green); }
+.fc-trend.trend-down { color: var(--red); }
+.fc-trend.trend-flat { color: var(--text-faint); }
+
 .gauge-readout .fc-status-label {
   font-family: var(--font-display);
   font-size: 0.95rem;
@@ -545,6 +556,52 @@ button.btn:disabled {
   flex-shrink: 0;
 }
 
+.timeline-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
+
+.timeline-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: 0.85rem;
+}
+
+.timeline-item .timeline-icon {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  flex-shrink: 0;
+  width: 60px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding-top: 1px;
+}
+
+.timeline-item.type-reading .timeline-icon { color: var(--cyan); }
+.timeline-item.type-addition .timeline-icon { color: var(--violet); }
+.timeline-item.type-maintenance .timeline-icon { color: var(--amber); }
+
+.timeline-item .timeline-body { flex: 1; min-width: 0; }
+
+.timeline-item .timeline-summary { color: var(--text); }
+
+.timeline-item .timeline-detail {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  margin-top: 2px;
+}
+
+.timeline-item .timeline-date {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .reading-table {
   width: 100%;
   border-collapse: collapse;
@@ -601,7 +658,8 @@ button:focus-visible, a:focus-visible {
   <header class="top">
     <div class="brand">
       <h1>PoolMon</h1>
-      <span class="tag">N4MI // EM83</span>
+      <!-- Version = date frontend/index.html was last edited. Bump this by hand on every change (no build step to automate it). -->
+      <span class="tag">N4MI // EM83 // v2026-08-17</span>
     </div>
     <div class="pool-meta" id="pool-meta">—</div>
   </header>
@@ -633,7 +691,7 @@ button:focus-visible, a:focus-visible {
       </div>
       <div class="gauge-readout">
         <div id="fc-current">
-          <span class="fc-value">—</span> <span class="fc-unit">ppm FC</span>
+          <span class="fc-value">—</span> <span class="fc-unit">ppm FC</span><span class="fc-trend" id="fc-trend"></span>
         </div>
         <div class="fc-status-label" id="fc-status-label"></div>
         <div class="fc-targets-row" id="fc-targets-row"></div>
@@ -650,6 +708,9 @@ button:focus-visible, a:focus-visible {
 
     <h2 style="font-family: var(--font-display); font-size: 1rem; color: var(--text-dim); margin: 24px 0 10px;">Notifications</h2>
     <div class="notif-list" id="notif-list"><div class="empty-state">No active notifications.</div></div>
+
+    <h2 style="font-family: var(--font-display); font-size: 1rem; color: var(--text-dim); margin: 24px 0 10px;">Recent Activity</h2>
+    <div class="timeline-list" id="timeline-list"><div class="empty-state">Loading…</div></div>
 
   </section>
 
@@ -821,6 +882,7 @@ async function init() {
 
   await loadDashboard();
   await loadNotifications();
+  await loadTimeline();
 }
 
 const STATUS_LABELS = {
@@ -954,6 +1016,17 @@ function renderGauge(d) {
 
   document.querySelector('#fc-current .fc-value').textContent = current !== null && current !== undefined ? current : '\u2014';
 
+  const trendEl = document.getElementById('fc-trend');
+  if (d.fc_trend_delta !== null && d.fc_trend_delta !== undefined && d.fc_trend_direction) {
+    const arrow = { up: '\u2191', down: '\u2193', flat: '\u2192' }[d.fc_trend_direction] || '';
+    const sign = d.fc_trend_delta > 0 ? '+' : '';
+    trendEl.textContent = `${arrow} ${sign}${d.fc_trend_delta}`;
+    trendEl.className = 'fc-trend trend-' + d.fc_trend_direction;
+  } else {
+    trendEl.textContent = '';
+    trendEl.className = 'fc-trend';
+  }
+
   if (!targets) {
     svg.innerHTML = `<path d="${describeArc(cx, cy, r, 0, 180)}" fill="none" stroke="#1f3a41" stroke-width="16" stroke-linecap="round"/>`;
     document.getElementById('fc-status-label').textContent = 'Log a reading with CYA to see targets';
@@ -1003,6 +1076,7 @@ function renderGauge(d) {
 function renderStatCards(d) {
   const cards = document.getElementById('stat-cards');
   const r = d.latest_reading;
+  const lastChlorine = d.last_chlorine_addition;
 
   const mk = (label, value, sub) => `
     <div class="card">
@@ -1011,8 +1085,16 @@ function renderStatCards(d) {
       ${sub ? `<div class="card-sub">${sub}</div>` : ''}
     </div>`;
 
+  const lastChlorineValue = lastChlorine
+    ? `${lastChlorine.quantity} ${lastChlorine.unit}`
+    : null;
+  const lastChlorineSub = lastChlorine
+    ? `${lastChlorine.chemical_name.replace(/_/g, ' ')} \u00b7 ${lastChlorine.addition_date}`
+    : '';
+
   cards.innerHTML =
     mk('pH', r?.ph, '') +
+    mk('Combined Cl', r?.combined_chlorine, r?.combined_chlorine != null ? 'ppm' : '') +
     mk('Total Alk', r?.total_alkalinity, 'ppm') +
     mk('Calcium', r?.calcium_hardness, 'ppm') +
     mk('CYA', r?.cyanuric_acid, 'ppm') +
@@ -1020,7 +1102,10 @@ function renderStatCards(d) {
     mk('Water Temp', r?.water_temp_f, r ? '\u00b0F' : '') +
     mk('Since Backwash', d.days_since_backwash, d.days_since_backwash != null ? 'days' : 'never logged') +
     mk('Since Brush', d.days_since_brush, d.days_since_brush != null ? 'days' : 'never logged') +
-    mk('Since Vacuum', d.days_since_vacuum, d.days_since_vacuum != null ? 'days' : 'never logged');
+    mk('Since Vacuum', d.days_since_vacuum, d.days_since_vacuum != null ? 'days' : 'never logged') +
+    mk('Since Skimmer', d.days_since_skimmer_emptied, d.days_since_skimmer_emptied != null ? 'days' : 'never logged') +
+    mk('Since Basket', d.days_since_basket_cleaned, d.days_since_basket_cleaned != null ? 'days' : 'never logged') +
+    mk('Last Chlorine', lastChlorineValue, lastChlorineSub);
 }
 
 async function quickLogMaintenance(eventType, extra = {}) {
@@ -1035,6 +1120,7 @@ async function quickLogMaintenance(eventType, extra = {}) {
       }),
     });
     await loadDashboard();
+    await loadTimeline();
   } catch (e) {
     alert('Failed to log: ' + e.message);
   }
@@ -1075,6 +1161,39 @@ async function loadNotifications() {
   });
 }
 
+const TIMELINE_ICONS = {
+  reading: 'Reading',
+  maintenance: 'Maint',
+  addition: 'Added',
+};
+
+async function loadTimeline() {
+  const list = document.getElementById('timeline-list');
+  let entries;
+  try {
+    entries = await api('/timeline?limit=15');
+  } catch (e) {
+    list.innerHTML = `<div class="notice danger">${escapeHtml(e.message)}</div>`;
+    return;
+  }
+
+  if (!entries.length) {
+    list.innerHTML = '<div class="empty-state">No activity logged yet.</div>';
+    return;
+  }
+
+  list.innerHTML = entries.map(e => `
+    <div class="timeline-item type-${e.type}">
+      <div class="timeline-icon">${TIMELINE_ICONS[e.type] || e.type}</div>
+      <div class="timeline-body">
+        <div class="timeline-summary">${escapeHtml(e.summary)}</div>
+        ${e.detail ? `<div class="timeline-detail">${escapeHtml(e.detail)}</div>` : ''}
+      </div>
+      <div class="timeline-date">${e.date}${e.time ? ' ' + e.time : ''}</div>
+    </div>
+  `).join('');
+}
+
 document.getElementById('test-method-select').addEventListener('change', (e) => {
   document.getElementById('dilution-factor-field').style.display =
     e.target.value === 'dilution' ? 'flex' : 'none';
@@ -1107,6 +1226,7 @@ document.getElementById('reading-form').addEventListener('submit', async (e) => 
     form.querySelector('[name=reading_date]').value = new Date().toISOString().slice(0,10);
     document.getElementById('dilution-factor-field').style.display = 'none';
     loadDashboard();
+    loadTimeline();
   } catch (err) {
     status.textContent = 'Error: ' + err.message;
     status.className = 'form-status err';
@@ -1324,6 +1444,7 @@ async function runCalc(chem, cfg) {
           logStatus.textContent = 'Logged.';
           logStatus.className = 'form-status ok';
           loadDashboard();
+          loadTimeline();
         } catch (e) {
           logStatus.textContent = 'Error: ' + e.message;
           logStatus.className = 'form-status err';

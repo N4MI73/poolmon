@@ -8,6 +8,7 @@ by domain (chemistry, maintenance, recovery, etc.).
 
 Route structure:
   GET  /api/dashboard                     - everything the dashboard needs
+  GET  /api/timeline                      - unified activity feed (readings + maintenance + additions)
   POST /api/chemistry/readings            - log a chemistry test
   GET  /api/chemistry/readings            - list readings (filterable)
   POST /api/chemistry/targets             - calculate FC targets for a CYA value
@@ -73,6 +74,7 @@ from app.models import (
     MaintenanceEventCreate, EquipmentIncidentCreate, EquipmentIncidentUpdate,
     WaterLevelEventCreate, OperationalStatusCreate,
     DashboardResponse, SeasonCreate, SeasonResponse, NotificationResponse,
+    LastChlorineAdditionSummary, TimelineEntry,
 )
 from engine.chemistry import (
     calculate_fc_targets, classify_fc_status,
@@ -242,6 +244,70 @@ def get_dashboard(db: sqlite3.Connection = Depends(get_db)):
         current_psi = latest_row["filter_pressure_psi"]
         pressure_pct = round(((current_psi - clean_psi) / clean_psi) * 100, 1)
 
+    # Daily FC trend - delta and direction vs. the previous reading.
+    # Independent of the CYA-gated block above so it still shows even on
+    # days a CYA test wasn't run.
+    fc_trend_delta = None
+    fc_trend_direction = None
+    if latest_row and latest_row.get("free_chlorine") is not None:
+        cur.execute("""
+            SELECT free_chlorine FROM chemistry_readings
+            WHERE id != ?
+            ORDER BY reading_date DESC, reading_time DESC
+            LIMIT 1
+        """, (latest_row["id"],))
+        prev_for_trend = cur.fetchone()
+        if prev_for_trend and prev_for_trend["free_chlorine"] is not None:
+            fc_trend_delta = round(latest_row["free_chlorine"] - prev_for_trend["free_chlorine"], 2)
+            if fc_trend_delta > 0:
+                fc_trend_direction = "up"
+            elif fc_trend_delta < 0:
+                fc_trend_direction = "down"
+            else:
+                fc_trend_direction = "flat"
+
+    # Last chlorine addition (liquid chlorine, Cal-Hypo, or Trichlor only -
+    # excludes stabilizer, muriatic acid, etc.)
+    cur.execute("""
+        SELECT addition_date, chemical_name, quantity_added, unit
+        FROM chemical_additions
+        WHERE chemical_name IN ('liquid_chlorine', 'cal_hypo', 'trichlor_tablet')
+        ORDER BY addition_date DESC, addition_time DESC
+        LIMIT 1
+    """)
+    last_chlorine_row = row_to_dict(cur.fetchone())
+    last_chlorine_addition = (
+        LastChlorineAdditionSummary(
+            chemical_name=last_chlorine_row["chemical_name"],
+            quantity=last_chlorine_row["quantity_added"],
+            unit=last_chlorine_row["unit"],
+            addition_date=last_chlorine_row["addition_date"],
+        )
+        if last_chlorine_row else None
+    )
+
+    # Days since skimmer emptied / pump basket cleaned - same "days since"
+    # pattern already used above for backwash/brush/vacuum.
+    cur.execute("""
+        SELECT condition_date FROM daily_conditions
+        WHERE skimmer_emptied = 1
+        ORDER BY condition_date DESC LIMIT 1
+    """)
+    last_skimmer = cur.fetchone()
+    days_since_skimmer = None
+    if last_skimmer:
+        days_since_skimmer = (date.today() - date.fromisoformat(last_skimmer["condition_date"])).days
+
+    cur.execute("""
+        SELECT condition_date FROM daily_conditions
+        WHERE pump_basket_cleaned = 1
+        ORDER BY condition_date DESC LIMIT 1
+    """)
+    last_basket = cur.fetchone()
+    days_since_basket = None
+    if last_basket:
+        days_since_basket = (date.today() - date.fromisoformat(last_basket["condition_date"])).days
+
     return DashboardResponse(
         current_mode=config["current_mode"],
         current_operational_status=config["current_operational_status"],
@@ -255,7 +321,79 @@ def get_dashboard(db: sqlite3.Connection = Depends(get_db)):
         days_since_vacuum=days_since_vacuum,
         filter_pressure_pct_above_clean=pressure_pct,
         suspect_reading_flag=suspect_flag,
+        fc_trend_delta=fc_trend_delta,
+        fc_trend_direction=fc_trend_direction,
+        last_chlorine_addition=last_chlorine_addition,
+        days_since_skimmer_emptied=days_since_skimmer,
+        days_since_basket_cleaned=days_since_basket,
     )
+
+
+# =============================================================================
+# TIMELINE
+# =============================================================================
+
+@app.get("/api/timeline", response_model=List[TimelineEntry])
+def get_timeline(limit: int = Query(25, ge=1, le=100), db: sqlite3.Connection = Depends(get_db)):
+    """
+    Unified chronological activity feed merging chemistry_readings,
+    maintenance_log, and chemical_additions - the three tables that make up
+    "what happened" day to day. Computed on request from existing data;
+    not a stored table.
+    """
+    cur = db.cursor()
+    entries = []
+
+    cur.execute("""
+        SELECT reading_date, reading_time, free_chlorine, combined_chlorine, ph, cyanuric_acid
+        FROM chemistry_readings
+        ORDER BY reading_date DESC, reading_time DESC
+        LIMIT ?
+    """, (limit,))
+    for r in cur.fetchall():
+        parts = []
+        if r["free_chlorine"] is not None:
+            parts.append(f"FC {r['free_chlorine']}")
+        if r["combined_chlorine"] is not None:
+            parts.append(f"CC {r['combined_chlorine']}")
+        if r["ph"] is not None:
+            parts.append(f"pH {r['ph']}")
+        if r["cyanuric_acid"] is not None:
+            parts.append(f"CYA {r['cyanuric_acid']}")
+        summary = "Reading logged" + (": " + ", ".join(parts) if parts else "")
+        entries.append(TimelineEntry(
+            date=r["reading_date"], time=r["reading_time"],
+            type="reading", summary=summary,
+        ))
+
+    cur.execute("""
+        SELECT event_date, event_time, event_type, notes
+        FROM maintenance_log
+        ORDER BY event_date DESC, event_time DESC
+        LIMIT ?
+    """, (limit,))
+    for r in cur.fetchall():
+        label = r["event_type"].replace("_", " ").title()
+        entries.append(TimelineEntry(
+            date=r["event_date"], time=r["event_time"],
+            type="maintenance", summary=f"{label} logged", detail=r["notes"],
+        ))
+
+    cur.execute("""
+        SELECT addition_date, addition_time, chemical_name, quantity_added, unit
+        FROM chemical_additions
+        ORDER BY addition_date DESC, addition_time DESC
+        LIMIT ?
+    """, (limit,))
+    for r in cur.fetchall():
+        label = r["chemical_name"].replace("_", " ").title()
+        entries.append(TimelineEntry(
+            date=r["addition_date"], time=r["addition_time"],
+            type="addition", summary=f"Added {r['quantity_added']} {r['unit']} {label}",
+        ))
+
+    entries.sort(key=lambda e: (e.date, e.time or ""), reverse=True)
+    return entries[:limit]
 
 
 # =============================================================================

@@ -397,6 +397,16 @@ class OperationalStatusCreate(BaseModel):
 # DASHBOARD
 # =============================================================================
 
+class LastChlorineAdditionSummary(BaseModel):
+    """Most recent addition of an actual chlorine source (liquid chlorine,
+    Cal-Hypo, or Trichlor tablets) - excludes non-chlorine chemicals like
+    stabilizer or muriatic acid."""
+    chemical_name: str
+    quantity: float
+    unit: str
+    addition_date: str
+
+
 class DashboardResponse(BaseModel):
     """Single response shape for the dashboard - everything the UI needs in
     one call rather than six separate fetches on every page load."""
@@ -412,6 +422,26 @@ class DashboardResponse(BaseModel):
     days_since_vacuum: Optional[int]
     filter_pressure_pct_above_clean: Optional[float]
     suspect_reading_flag: Optional[str]
+    fc_trend_delta: Optional[float] = None
+    fc_trend_direction: Optional[str] = None  # 'up' | 'down' | 'flat'
+    last_chlorine_addition: Optional[LastChlorineAdditionSummary] = None
+    days_since_skimmer_emptied: Optional[int] = None
+    days_since_basket_cleaned: Optional[int] = None
+
+
+# =============================================================================
+# TIMELINE
+# =============================================================================
+
+class TimelineEntry(BaseModel):
+    """One unified activity-feed row, merged from chemistry_readings,
+    maintenance_log, and chemical_additions. Read-only, computed on request -
+    not a stored table."""
+    date: str
+    time: Optional[str] = None
+    type: str  # 'reading' | 'maintenance' | 'addition'
+    summary: str
+    detail: Optional[str] = None
 
 
 # =============================================================================
