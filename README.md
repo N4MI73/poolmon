@@ -18,6 +18,7 @@ Built for a single-user, local-network NAS deployment.
 - Records equipment incidents (breaker trips, pump issues) separately from routine maintenance
 - Tracks six operational states (Swimming Ready → Investigation → Recovery → Polishing → Maintenance → Winterized) with full history
 - Logs daily conditions (weather, swimmer count, debris, cleaning tasks) for trend analysis
+- Dashboard surfaces a daily FC trend indicator, last-chlorine-addition tracking, and a unified recent-activity timeline merging readings, maintenance, and chemical additions
 
 ---
 
@@ -76,7 +77,7 @@ Copy that folder = complete backup of all history, readings, and photos.
 ```
 poolmon/
   app/
-    main.py          ← FastAPI routes (41 endpoints)
+    main.py          ← FastAPI routes (34 endpoints)
     database.py      ← SQLite connection and initialization
     models.py        ← Pydantic request/response models
   engine/
