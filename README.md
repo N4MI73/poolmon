@@ -77,7 +77,7 @@ Copy that folder = complete backup of all history, readings, and photos.
 ```
 poolmon/
   app/
-    main.py          ← FastAPI routes (34 endpoints)
+    main.py          ← FastAPI routes (38 endpoints)
     database.py      ← SQLite connection and initialization
     models.py        ← Pydantic request/response models
   engine/
